@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 台股溢價監控系統</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- 頂部導航 -->
+  <nav class="navbar">
+    <div class="navbar-brand">
+      <div class="brand-icon">🤖</div>
+      <div class="brand-text">
+        <h1>AI 台股溢價監控系統</h1>
+        <span>Taiwan Stock Premium Monitor</span>
+      </div>
+    </div>
+    <div class="navbar-right">
+      <div class="market-status" id="marketStatus">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">載入中...</span>
+      </div>
+      <div class="time-display" id="timeDisplay">--:--:--</div>
+      <button class="refresh-btn" onclick="refreshData()">
+        <i class="fas fa-sync-alt" id="refreshIcon"></i> 立即刷新
+      </button>
+    </div>
+  </nav>
+
+  <!-- 警報橫幅 -->
+  <div class="alert-banner" id="alertBanner" style="display:none;">
+    <div class="alert-content">
+      <i class="fas fa-exclamation-triangle"></i>
+      <span id="alertMessage"></span>
+      <button onclick="document.getElementById('alertBanner').style.display='none'">✕</button>
+    </div>
+  </div>
+
+  <!-- 主要內容 -->
+  <main class="main-container">
+
+    <!-- 市場概覽卡片 -->
+    <section class="overview-section">
+      <div class="overview-grid">
+        <div class="overview-card" id="card-taiex">
+          <div class="card-icon blue"><i class="fas fa-chart-line"></i></div>
+          <div class="card-info">
+            <div class="card-label">加權指數</div>
+            <div class="card-value" id="taiexValue">--</div>
+            <div class="card-change" id="taiexChange">--</div>
+          </div>
+        </div>
+        <div class="overview-card" id="card-premium">
+          <div class="card-icon yellow"><i class="fas fa-percentage"></i></div>
+          <div class="card-info">
+            <div class="card-label">高溢價股數</div>
+            <div class="card-value" id="premiumCount">--</div>
+            <div class="card-change">溢價 &gt; 5%</div>
+          </div>
+        </div>
+        <div class="overview-card" id="card-gapup">
+          <div class="card-icon green"><i class="fas fa-arrow-up"></i></div>
+          <div class="card-info">
+            <div class="card-label">跳空缺口股</div>
+            <div class="card-value" id="gapCount">--</div>
+            <div class="card-change">今日跳空</div>
+          </div>
+        </div>
+        <div class="overview-card" id="card-volume">
+          <div class="card-icon red"><i class="fas fa-fire"></i></div>
+          <div class="card-info">
+            <div class="card-label">AI 爆量預測</div>
+            <div class="card-value" id="volumeCount">--</div>
+            <div class="card-change">高機率標的</div>
+          </div>
+        </div>
+        <div class="overview-card" id="card-arbitrage">
+          <div class="card-icon purple"><i class="fas fa-exchange-alt"></i></div>
+          <div class="card-info">
+            <div class="card-label">套利機會</div>
+            <div class="card-value" id="arbitrageCount">--</div>
+            <div class="card-change">今日發現</div>
+          </div>
+        </div>
+        <div class="overview-card" id="card-highopen">
+          <div class="card-icon orange"><i class="fas fa-rocket"></i></div>
+          <div class="card-info">
+            <div class="card-label">高開股</div>
+            <div class="card-value" id="highOpenCount">--</div>
+            <div class="card-change">高開 &gt; 2%</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 主要功能區塊 -->
+    <div class="content-grid">
+
+      <!-- 左側：溢價排行榜 -->
+      <div class="left-panel">
+        <!-- 標籤切換 -->
+        <div class="panel-tabs">
+          <button class="tab-btn active" onclick="switchTab('premium')">
+            <i class="fas fa-trophy"></i> 溢價排行榜
+          </button>
+          <button class="tab-btn" onclick="switchTab('highopen')">
+            <i class="fas fa-rocket"></i> 高開股
+          </button>
+          <button class="tab-btn" onclick="switchTab('gap')">
+            <i class="fas fa-gap"></i> 跳空缺口
+          </button>
+          <button class="tab-btn" onclick="switchTab('arbitrage')">
+            <i class="fas fa-exchange-alt"></i> 套利機會
+          </button>
+        </div>
+
+        <!-- 溢價排行榜 -->
+        <div class="tab-content active" id="tab-premium">
+          <div class="table-header">
+            <span>台股溢價排行榜</span>
+            <span class="update-time" id="premiumUpdateTime">更新中...</span>
+          </div>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>排名</th>
+                  <th>代號/名稱</th>
+                  <th>現價</th>
+                  <th>昨收</th>
+                  <th>溢價%</th>
+                  <th>成交量</th>
+                  <th>警報</th>
+                </tr>
+              </thead>
+              <tbody id="premiumTableBody">
+                <tr><td colspan="7" class="loading-row"><i class="fas fa-spinner fa-spin"></i> 載入資料中...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 高開股 -->
+        <div class="tab-content" id="tab-highopen">
+          <div class="table-header">
+            <span>高開股偵測（高開 &gt; 2%）</span>
+            <span class="update-time" id="highOpenUpdateTime">更新中...</span>
+          </div>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>代號</th>
+                  <th>名稱</th>
+                  <th>開盤價</th>
+                  <th>昨收</th>
+                  <th>高開%</th>
+                  <th>現價</th>
+                  <th>成交量</th>
+                </tr>
+              </thead>
+              <tbody id="highOpenTableBody">
+                <tr><td colspan="7" class="loading-row"><i class="fas fa-spinner fa-spin"></i> 載入資料中...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 跳空缺口 -->
+        <div class="tab-content" id="tab-gap">
+          <div class="table-header">
+            <span>跳空缺口偵測</span>
+            <span class="update-time" id="gapUpdateTime">更新中...</span>
+          </div>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>代號</th>
+                  <th>名稱</th>
+                  <th>缺口類型</th>
+                  <th>開盤價</th>
+                  <th>昨高/昨低</th>
+                  <th>缺口大小</th>
+                  <th>現價</th>
+                </tr>
+              </thead>
+              <tbody id="gapTableBody">
+                <tr><td colspan="7" class="loading-row"><i class="fas fa-spinner fa-spin"></i> 載入資料中...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 套利機會 -->
+        <div class="tab-content" id="tab-arbitrage">
+          <div class="table-header">
+            <span>套利機會（溢價 &gt; 5%）</span>
+            <span class="update-time" id="arbitrageUpdateTime">更新中...</span>
+          </div>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>代號</th>
+                  <th>名稱</th>
+                  <th>現價</th>
+                  <th>公允價值</th>
+                  <th>溢價%</th>
+                  <th>套利空間</th>
+                  <th>風險評級</th>
+                </tr>
+              </thead>
+              <tbody id="arbitrageTableBody">
+                <tr><td colspan="7" class="loading-row"><i class="fas fa-spinner fa-spin"></i> 載入資料中...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右側：圖表與 AI 分析 -->
+      <div class="right-panel">
+
+        <!-- 溢價分布圖 -->
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3><i class="fas fa-chart-bar"></i> 溢價分布圖</h3>
+            <div class="chart-controls">
+              <button class="chart-btn active" onclick="switchChart('premium')">溢價</button>
+              <button class="chart-btn" onclick="switchChart('volume')">成交量</button>
+              <button class="chart-btn" onclick="switchChart('sector')">類股</button>
+            </div>
+          </div>
+          <div class="chart-wrapper">
+            <canvas id="mainChart"></canvas>
+          </div>
+        </div>
+
+        <!-- AI 趨勢分析 -->
+        <div class="ai-analysis-card">
+          <div class="ai-header">
+            <div class="ai-icon">🤖</div>
+            <div>
+              <h3>AI 趨勢分析</h3>
+              <span class="ai-badge">Powered by AI</span>
+            </div>
+            <button class="ai-refresh-btn" onclick="refreshAIAnalysis()">
+              <i class="fas fa-brain"></i> 重新分析
+            </button>
+          </div>
+          <div class="ai-content" id="aiAnalysisContent">
+            <div class="ai-loading">
+              <div class="ai-spinner"></div>
+              <span>AI 正在分析市場趨勢...</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- AI 開盤爆量預測 -->
+        <div class="prediction-card">
+          <div class="prediction-header">
+            <h3><i class="fas fa-bolt"></i> AI 開盤爆量預測</h3>
+            <span class="prediction-badge">明日預測</span>
+          </div>
+          <div class="prediction-list" id="predictionList">
+            <div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> 分析中...</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- 底部：市場熱力圖 -->
+    <section class="heatmap-section">
+      <div class="section-header">
+        <h2><i class="fas fa-th"></i> 市場熱力圖</h2>
+        <div class="heatmap-legend">
+          <span class="legend-item red">大跌</span>
+          <span class="legend-item light-red">小跌</span>
+          <span class="legend-item gray">持平</span>
+          <span class="legend-item light-green">小漲</span>
+          <span class="legend-item green">大漲</span>
+        </div>
+      </div>
+      <div class="heatmap-container" id="heatmapContainer">
+        <div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> 載入熱力圖...</div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- 警報通知 -->
+  <div class="notification-container" id="notificationContainer"></div>
+
+  <!-- 設定面板 -->
+  <div class="settings-fab" onclick="toggleSettings()">
+    <i class="fas fa-cog"></i>
+  </div>
+  <div class="settings-panel" id="settingsPanel" style="display:none;">
+    <div class="settings-header">
+      <h3>系統設定</h3>
+      <button onclick="toggleSettings()">✕</button>
+    </div>
+    <div class="settings-body">
+      <div class="setting-item">
+        <label>自動刷新間隔</label>
+        <select id="refreshInterval" onchange="updateRefreshInterval()">
+          <option value="30">30 秒</option>
+          <option value="60" selected>1 分鐘</option>
+          <option value="300">5 分鐘</option>
+          <option value="0">關閉</option>
+        </select>
+      </div>
+      <div class="setting-item">
+        <label>溢價警報閾值</label>
+        <input type="number" id="alertThreshold" value="5" min="1" max="20" step="0.5" />
+        <span>%</span>
+      </div>
+      <div class="setting-item">
+        <label>高開偵測閾值</label>
+        <input type="number" id="highOpenThreshold" value="2" min="0.5" max="10" step="0.5" />
+        <span>%</span>
+      </div>
+      <div class="setting-item">
+        <label>聲音警報</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="soundAlert" checked />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="setting-item">
+        <label>顯示股數限制</label>
+        <select id="displayLimit">
+          <option value="20">前 20 名</option>
+          <option value="50" selected>前 50 名</option>
+          <option value="100">前 100 名</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
