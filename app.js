@@ -103,6 +103,47 @@ function updateMarketStatus() {
   }
 }
 
+async function fetchGoodinfoData() {
+  try {
+    const url = 'https://goodinfo.tw/tw/StockList.asp?MARKET_CAT=%E7%86%B1%E9%96%80%E6%8E%92%E8%A1%8C&INDUSTRY_CAT=%E7%86%B1%E9%96%80%E5%80%8B%E8%82%A1%28%E7%95%B6%E6%97%A5%29';
+    const proxyUrl = 'https://api.allorigins.win/get?url=';
+    const response = await fetch(proxyUrl + encodeURIComponent(url), { signal: AbortSignal.timeout(15000) });
+    if (!response.ok) throw new Error('Goodinfo request failed');
+    const wrapper = await response.json();
+    const html = wrapper.contents;
+    
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const rows = doc.querySelectorAll('tr[id^="row"]');
+    
+    if (rows.length > 0) {
+      const results = [];
+      rows.forEach(function(row) {
+        const cells = row.querySelectorAll('td');
+        if (cells.length >= 10) {
+          results.push({
+            code: cells[1].innerText.trim(),
+            name: cells[2].innerText.trim(),
+            price: parseFloat(cells[3].innerText.trim()) || 0,
+            change: parseFloat(cells[5].innerText.trim()) || 0,
+            changePct: parseFloat(cells[6].innerText.trim()) || 0,
+            volume: parseInt(cells[8].innerText.replace(/,/g, '')) || 0,
+            open: parseFloat(cells[9].innerText.trim()) || 0,
+            high: parseFloat(cells[10].innerText.trim()) || 0,
+            low: parseFloat(cells[11].innerText.trim()) || 0
+          });
+        }
+      });
+      console.log('Goodinfo data parsed successfully:', results.length, 'stocks');
+      return { source: 'Goodinfo', data: results };
+    }
+    return null;
+  } catch (err) {
+    console.warn('Goodinfo data fetch failed:', err.message);
+    return null;
+  }
+}
+
 async function fetchTWSERealtimeData() {
   try {
     const stockCodes = ['2330','2317','2454','2308','2382','2881','2882','2886','2891','2892',
@@ -235,7 +276,18 @@ function generateMockData() {
 function processStockData(rawData, source) {
   if (!rawData || rawData.length === 0) return generateMockData();
   
-  if (source === 'TWSE') {
+  if (source === 'Goodinfo') {
+    return rawData.map(function(s) {
+      const prevClose = s.price - s.change;
+      return {
+        code: s.code, name: s.name, sector: getSector(s.code),
+        openPrice: s.open, highPrice: s.high, lowPrice: s.low,
+        closePrice: s.price, prevClose: prevClose, change: s.change,
+        changePercent: s.changePct,
+        volume: s.volume, premiumPct: s.changePct, isRealtime: true
+      };
+    });
+  } else if (source === 'TWSE') {
     return rawData.map(function(s) {
       const fields = s.split('|');
       if (fields.length < 9) return null;
@@ -568,22 +620,29 @@ async function refreshData() {
   AppState.isLoading = true;
   document.getElementById('refreshBtn').innerHTML = '<span class="loading-spinner"></span> 載入中...';
   
-  let result = await fetchTWSERealtimeData();
+  let result = await fetchGoodinfoData();
   let processed;
   
   if (result && result.data && result.data.length > 0) {
-    processed = processStockData(result.data, 'TWSE');
-    showNotification('success', '資料來源', '已連接 TWSE 官方即時 API');
+    processed = processStockData(result.data, 'Goodinfo');
+    showNotification('success', '資料來源', '已連接 Goodinfo! 即時行情');
   } else {
-    console.log('TWSE API unavailable, trying Yahoo Finance...');
-    result = await fetchYahooFinanceData();
+    console.log('Goodinfo unavailable, trying TWSE...');
+    result = await fetchTWSERealtimeData();
     if (result && result.data && result.data.length > 0) {
-      processed = processStockData(result.data, 'Yahoo');
-      showNotification('info', '資料來源', '已連接 Yahoo Finance API');
+      processed = processStockData(result.data, 'TWSE');
+      showNotification('info', '資料來源', '已連接 TWSE 官方即時 API');
     } else {
-      console.log('All APIs unavailable, using mock data');
-      processed = generateMockData();
-      showNotification('warning', '資料來源', '使用模擬數據（實時 API 暫時無法連接）');
+      console.log('TWSE API unavailable, trying Yahoo Finance...');
+      result = await fetchYahooFinanceData();
+      if (result && result.data && result.data.length > 0) {
+        processed = processStockData(result.data, 'Yahoo');
+        showNotification('info', '資料來源', '已連接 Yahoo Finance API');
+      } else {
+        console.log('All APIs unavailable, using mock data');
+        processed = generateMockData();
+        showNotification('warning', '資料來源', '使用模擬數據（實時 API 暫時無法連接）');
+      }
     }
   }
   
