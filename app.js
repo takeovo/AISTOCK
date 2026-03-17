@@ -103,6 +103,51 @@ function updateMarketStatus() {
   }
 }
 
+async function fetchPChomeData() {
+  try {
+    const url = 'https://stock.pchome.com.tw/rank/market_rank/top1.html';
+    const proxyUrl = 'https://api.allorigins.win/get?url=';
+    const response = await fetch(proxyUrl + encodeURIComponent(url), { signal: AbortSignal.timeout(15000) });
+    if (!response.ok) throw new Error('PChome request failed');
+    const wrapper = await response.json();
+    const html = wrapper.contents;
+    
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const rows = doc.querySelectorAll('table.tb_stock tr');
+    
+    if (rows.length > 1) {
+      const results = [];
+      rows.forEach(function(row, idx) {
+        if (idx === 0) return; // Skip header
+        const cells = row.querySelectorAll('td');
+        if (cells.length >= 8) {
+          const nameCode = cells[1].innerText.trim();
+          const code = nameCode.match(/\d+/)?.[0] || '';
+          const name = nameCode.replace(code, '').trim();
+          results.push({
+            code: code,
+            name: name,
+            price: parseFloat(cells[2].innerText.trim()) || 0,
+            change: parseFloat(cells[3].innerText.trim()) || 0,
+            changePct: parseFloat(cells[4].innerText.replace('%', '').trim()) || 0,
+            volume: parseInt(cells[5].innerText.replace(/,/g, '')) || 0,
+            open: parseFloat(cells[2].innerText.trim()) || 0, // PChome list might not have open in summary
+            high: parseFloat(cells[2].innerText.trim()) || 0,
+            low: parseFloat(cells[2].innerText.trim()) || 0
+          });
+        }
+      });
+      console.log('PChome data parsed successfully:', results.length, 'stocks');
+      return { source: 'PChome', data: results };
+    }
+    return null;
+  } catch (err) {
+    console.warn('PChome data fetch failed:', err.message);
+    return null;
+  }
+}
+
 async function fetchGoodinfoData() {
   try {
     const url = 'https://goodinfo.tw/tw/StockList.asp?MARKET_CAT=%E7%86%B1%E9%96%80%E6%8E%92%E8%A1%8C&INDUSTRY_CAT=%E7%86%B1%E9%96%80%E5%80%8B%E8%82%A1%28%E7%95%B6%E6%97%A5%29';
@@ -276,7 +321,18 @@ function generateMockData() {
 function processStockData(rawData, source) {
   if (!rawData || rawData.length === 0) return generateMockData();
   
-  if (source === 'Goodinfo') {
+  if (source === 'PChome') {
+    return rawData.map(function(s) {
+      const prevClose = s.price - s.change;
+      return {
+        code: s.code, name: s.name, sector: getSector(s.code),
+        openPrice: s.open, highPrice: s.high, lowPrice: s.low,
+        closePrice: s.price, prevClose: prevClose, change: s.change,
+        changePercent: s.changePct,
+        volume: s.volume, premiumPct: s.changePct, isRealtime: true
+      };
+    });
+  } else if (source === 'Goodinfo') {
     return rawData.map(function(s) {
       const prevClose = s.price - s.change;
       return {
@@ -620,28 +676,35 @@ async function refreshData() {
   AppState.isLoading = true;
   document.getElementById('refreshBtn').innerHTML = '<span class="loading-spinner"></span> 載入中...';
   
-  let result = await fetchGoodinfoData();
+  let result = await fetchPChomeData();
   let processed;
   
   if (result && result.data && result.data.length > 0) {
-    processed = processStockData(result.data, 'Goodinfo');
-    showNotification('success', '資料來源', '已連接 Goodinfo! 即時行情');
+    processed = processStockData(result.data, 'PChome');
+    showNotification('success', '資料來源', '已連接 PChome! 即時行情');
   } else {
-    console.log('Goodinfo unavailable, trying TWSE...');
-    result = await fetchTWSERealtimeData();
+    console.log('PChome unavailable, trying Goodinfo...');
+    result = await fetchGoodinfoData();
     if (result && result.data && result.data.length > 0) {
-      processed = processStockData(result.data, 'TWSE');
-      showNotification('info', '資料來源', '已連接 TWSE 官方即時 API');
+      processed = processStockData(result.data, 'Goodinfo');
+      showNotification('info', '資料來源', '已連接 Goodinfo! 即時行情');
     } else {
-      console.log('TWSE API unavailable, trying Yahoo Finance...');
-      result = await fetchYahooFinanceData();
+      console.log('Goodinfo unavailable, trying TWSE...');
+      result = await fetchTWSERealtimeData();
       if (result && result.data && result.data.length > 0) {
-        processed = processStockData(result.data, 'Yahoo');
-        showNotification('info', '資料來源', '已連接 Yahoo Finance API');
+        processed = processStockData(result.data, 'TWSE');
+        showNotification('info', '資料來源', '已連接 TWSE 官方即時 API');
       } else {
-        console.log('All APIs unavailable, using mock data');
-        processed = generateMockData();
-        showNotification('warning', '資料來源', '使用模擬數據（實時 API 暫時無法連接）');
+        console.log('TWSE API unavailable, trying Yahoo Finance...');
+        result = await fetchYahooFinanceData();
+        if (result && result.data && result.data.length > 0) {
+          processed = processStockData(result.data, 'Yahoo');
+          showNotification('info', '資料來源', '已連接 Yahoo Finance API');
+        } else {
+          console.log('All APIs unavailable, using mock data');
+          processed = generateMockData();
+          showNotification('warning', '資料來源', '使用模擬數據（實時 API 暫時無法連接）');
+        }
       }
     }
   }
