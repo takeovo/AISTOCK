@@ -103,6 +103,34 @@ function updateMarketStatus() {
   }
 }
 
+async function fetchTWSERealtimeData() {
+  try {
+    const stockCodes = ['2330','2317','2454','2308','2382','2881','2882','2886','2891','2892',
+      '1301','1303','2002','2412','3008','2357','2379','2395','2408','3711',
+      '2345','4904','2609','2615','2603','6505','6415','3034','3037','4938',
+      '2207','1216','1101','2303','5347','6669','0050','0056','00878','00919',
+      '2337','3533','3702','4966','2201','2211','2105','006208','00631L','3231','2610'];
+    
+    const ex_ch = stockCodes.map(function(c) { return 'tse_' + c + '.tw'; }).join('|');
+    const apiUrl = 'https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=' + encodeURIComponent(ex_ch) + '&json=1&delay=0';
+    
+    const proxyUrl = 'https://api.allorigins.win/get?url=';
+    const response = await fetch(proxyUrl + encodeURIComponent(apiUrl), { signal: AbortSignal.timeout(15000) });
+    if (!response.ok) throw new Error('TWSE API failed');
+    const wrapper = await response.json();
+    const data = JSON.parse(wrapper.contents);
+    
+    if (data.msgArray && Array.isArray(data.msgArray)) {
+      console.log('TWSE real-time data fetched successfully:', data.msgArray.length, 'stocks');
+      return { source: 'TWSE', data: data.msgArray };
+    }
+    return null;
+  } catch (err) {
+    console.warn('TWSE real-time API failed:', err.message);
+    return null;
+  }
+}
+
 async function fetchYahooFinanceData() {
   try {
     const proxyUrl = 'https://api.allorigins.win/get?url=';
@@ -113,7 +141,8 @@ async function fetchYahooFinanceData() {
     const wrapper = await response.json();
     const data = JSON.parse(wrapper.contents);
     if (data.quoteResponse && data.quoteResponse.result) {
-      return data.quoteResponse.result;
+      console.log('Yahoo Finance data fetched successfully');
+      return { source: 'Yahoo', data: data.quoteResponse.result };
     }
     return null;
   } catch (err) {
@@ -203,27 +232,56 @@ function generateMockData() {
   });
 }
 
-function processStockData(rawData) {
+function processStockData(rawData, source) {
   if (!rawData || rawData.length === 0) return generateMockData();
-  return rawData.map(function(s) {
-    const close = s.regularMarketPrice || 0;
-    const open = s.regularMarketOpen || close;
-    const high = s.regularMarketDayHigh || close;
-    const low = s.regularMarketDayLow || close;
-    const prevClose = s.regularMarketPreviousClose || close;
-    const change = s.regularMarketChange || 0;
-    const changePct = s.regularMarketChangePercent || 0;
-    const volume = s.regularMarketVolume || 0;
-    const code = s.symbol.replace('.TW', '');
-    
-    return {
-      code: code, name: s.shortName || s.longName || code, sector: getSector(code),
-      openPrice: open, highPrice: high, lowPrice: low,
-      closePrice: close, prevClose: prevClose, change: change,
-      changePercent: parseFloat(changePct.toFixed(2)),
-      volume: volume, premiumPct: parseFloat(changePct.toFixed(2)), isRealtime: true
-    };
-  });
+  
+  if (source === 'TWSE') {
+    return rawData.map(function(s) {
+      const fields = s.split('|');
+      if (fields.length < 9) return null;
+      
+      const code = fields[0].replace('tse_', '').replace('.tw', '');
+      const name = fields[1];
+      const openPrice = parseFloat(fields[3]) || 0;
+      const highPrice = parseFloat(fields[4]) || 0;
+      const lowPrice = parseFloat(fields[5]) || 0;
+      const closePrice = parseFloat(fields[2]) || 0;
+      const prevClose = parseFloat(fields[6]) || closePrice;
+      const change = closePrice - prevClose;
+      const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
+      const volume = parseInt(fields[8].replace(/,/g, '')) || 0;
+      
+      return {
+        code: code, name: name, sector: getSector(code),
+        openPrice: openPrice, highPrice: highPrice, lowPrice: lowPrice,
+        closePrice: closePrice, prevClose: prevClose, change: change,
+        changePercent: parseFloat(changePct.toFixed(2)),
+        volume: volume, premiumPct: parseFloat(changePct.toFixed(2)), isRealtime: true
+      };
+    }).filter(function(s) { return s !== null; });
+  } else if (source === 'Yahoo') {
+    return rawData.map(function(s) {
+      const close = s.regularMarketPrice || 0;
+      const open = s.regularMarketOpen || close;
+      const high = s.regularMarketDayHigh || close;
+      const low = s.regularMarketDayLow || close;
+      const prevClose = s.regularMarketPreviousClose || close;
+      const change = s.regularMarketChange || 0;
+      const changePct = s.regularMarketChangePercent || 0;
+      const volume = s.regularMarketVolume || 0;
+      const code = s.symbol.replace('.TW', '');
+      
+      return {
+        code: code, name: s.shortName || s.longName || code, sector: getSector(code),
+        openPrice: open, highPrice: high, lowPrice: low,
+        closePrice: close, prevClose: prevClose, change: change,
+        changePercent: parseFloat(changePct.toFixed(2)),
+        volume: volume, premiumPct: parseFloat(changePct.toFixed(2)), isRealtime: true
+      };
+    });
+  }
+  
+  return generateMockData();
 }
 
 function getSector(code) {
@@ -510,8 +568,25 @@ async function refreshData() {
   AppState.isLoading = true;
   document.getElementById('refreshBtn').innerHTML = '<span class="loading-spinner"></span> 載入中...';
   
-  const rawData = await fetchYahooFinanceData();
-  const processed = processStockData(rawData);
+  let result = await fetchTWSERealtimeData();
+  let processed;
+  
+  if (result && result.data && result.data.length > 0) {
+    processed = processStockData(result.data, 'TWSE');
+    showNotification('success', '資料來源', '已連接 TWSE 官方即時 API');
+  } else {
+    console.log('TWSE API unavailable, trying Yahoo Finance...');
+    result = await fetchYahooFinanceData();
+    if (result && result.data && result.data.length > 0) {
+      processed = processStockData(result.data, 'Yahoo');
+      showNotification('info', '資料來源', '已連接 Yahoo Finance API');
+    } else {
+      console.log('All APIs unavailable, using mock data');
+      processed = generateMockData();
+      showNotification('warning', '資料來源', '使用模擬數據（實時 API 暫時無法連接）');
+    }
+  }
+  
   AppState.stockData = processed;
   AppState.lastUpdate = new Date();
   
